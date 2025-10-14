@@ -1,0 +1,62 @@
+{
+  "AFRICA_Northern Africa_FY2024": {
+    "status": "error",
+    "timestamp": "2025-10-14T12:54:50.678656",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0
+    }
+  },
+  "AFRICA_Northern Africa_FY2025": {
+    "status": "error",
+    "timestamp": "2025-10-14T12:55:02.703753",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0
+    }
+  },
+  "AFRICA_Northern Africa_FY2026": {
+    "status": "error",
+    "timestamp": "2025-10-14T12:55:14.618222",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0
+    }
+  },
+  "AFRICA_Eastern Africa_FY2024": {
+    "status": "error",
+    "timestamp": "2025-10-14T12:56:21.523973",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0
+    }
+  },
+  "AFRICA_Eastern Africa_FY2025": {
+    "status": "error",
+    "timestamp": "2025-10-14T12:56:33.538156",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0
+    }
+  },
+  "AFRICA_Eastern Africa_FY2026": {
+    "status": "error",
+    "timestamp": "2025-10-14T12:56:45.321041",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0
+    }
+  }
+}
