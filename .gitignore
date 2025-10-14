@@ -1,20 +1,34 @@
 # Python
 __pycache__/
 *.py[cod]
-*.so
+*.pyc
 .Python
 env/
 venv/
 
-# Data files
-data/*.csv
-data/*.zip
+# Logs
 *.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
 
 # IDE
 .vscode/
 .idea/
+*.swp
 .DS_Store
+
+# Data files (except database)
+data/*.csv
+data/*.zip
+data/bootstrap_progress.json
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Keep the database (tracked by LFS)
+!data/global_opportunities.db

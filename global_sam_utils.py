@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-global_sam_utils.py - Global SAM.gov data handler for Spirit of America
-Handles all countries worldwide organized by Spirit of America's portfolio regions
+global_sam_utils.py - Fixed Global SAM.gov data handler for Spirit of America
+Fixed CSV reading based on working Africa Dashboard code
 """
 
 import os
 import re
 import sqlite3
-import hashlib
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any
@@ -18,9 +17,6 @@ import json
 
 import pandas as pd
 import numpy as np
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # Configure logging
 logging.basicConfig(
@@ -28,6 +24,63 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# CSV READER - FIXED FROM AFRICA DASHBOARD
+# ============================================================================
+
+class CSVReader:
+    """Read SAM.gov CSV files with proper encoding handling"""
+    
+    def __init__(self, chunk_size: int = 10000):
+        self.chunk_size = chunk_size
+        
+    def read_csv_chunks(self, filepath: Path, chunksize: int = None):
+        """Read CSV in chunks with encoding detection - FIXED VERSION"""
+        if chunksize is None:
+            chunksize = self.chunk_size
+            
+        # Try different encodings in order of likelihood
+        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+        
+        for encoding in encodings:
+            try:
+                logger.info(f"Reading CSV with encoding: {encoding}")
+                
+                # Read with all columns as strings to avoid type issues
+                for chunk in pd.read_csv(
+                    filepath,
+                    encoding=encoding,
+                    dtype=str,
+                    chunksize=chunksize,
+                    on_bad_lines='skip',
+                    low_memory=False
+                ):
+                    yield chunk
+                    
+                return  # Success
+                
+            except UnicodeDecodeError:
+                logger.warning(f"Failed with encoding {encoding}, trying next...")
+                continue
+            except Exception as e:
+                logger.error(f"Error reading CSV with {encoding}: {e}")
+                continue
+                
+        # If all encodings fail, use latin-1 with error handling
+        logger.warning("All encodings failed, using latin-1 with error='replace'")
+        try:
+            for chunk in pd.read_csv(
+                filepath,
+                encoding='latin-1',
+                encoding_errors='replace',
+                dtype=str,
+                chunksize=chunksize,
+                on_bad_lines='skip'
+            ):
+                yield chunk
+        except Exception as e:
+            raise ValueError(f"Could not read CSV file: {filepath}. Error: {e}")
 
 # ============================================================================
 # GLOBAL COUNTRY DATA - Spirit of America Portfolios
@@ -46,10 +99,9 @@ class GlobalCountryManager:
             "Eastern Africa": {
                 "Burundi": "BDI", "Comoros": "COM", "Djibouti": "DJI", "Eritrea": "ERI",
                 "Ethiopia": "ETH", "Kenya": "KEN", "Madagascar": "MDG", "Malawi": "MWI",
-                "Mauritius": "MUS", "Mayotte": "MYT", "Mozambique": "MOZ", "Réunion": "REU",
-                "Rwanda": "RWA", "Seychelles": "SYC", "Somalia": "SOM", "South Sudan": "SSD",
-                "Tanzania": "TZA", "Uganda": "UGA", "Zambia": "ZMB", "Zimbabwe": "ZWE",
-                "British Indian Ocean Territory": "IOT"
+                "Mauritius": "MUS", "Mozambique": "MOZ", "Rwanda": "RWA", 
+                "Seychelles": "SYC", "Somalia": "SOM", "South Sudan": "SSD",
+                "Tanzania": "TZA", "Uganda": "UGA", "Zambia": "ZMB", "Zimbabwe": "ZWE"
             },
             "Middle Africa": {
                 "Angola": "AGO", "Cameroon": "CMR", "Central African Republic": "CAF",
@@ -64,23 +116,18 @@ class GlobalCountryManager:
                 "Benin": "BEN", "Burkina Faso": "BFA", "Cabo Verde": "CPV",
                 "Côte d'Ivoire": "CIV", "Gambia": "GMB", "Ghana": "GHA", "Guinea": "GIN",
                 "Guinea-Bissau": "GNB", "Liberia": "LBR", "Mali": "MLI", "Niger": "NER",
-                "Nigeria": "NGA", "Senegal": "SEN", "Sierra Leone": "SLE", "Togo": "TGO",
-                "Saint Helena": "SHN", "Ascension Island": "SHN", "Tristan da Cunha": "SHN"
+                "Nigeria": "NGA", "Senegal": "SEN", "Sierra Leone": "SLE", "Togo": "TGO"
             }
         },
         "AMERICAS": {
             "Caribbean": {
-                "Anguilla": "AIA", "Antigua and Barbuda": "ATG", "Aruba": "ABW",
-                "Bahamas": "BHS", "Barbados": "BRB", "Bonaire": "BES",
-                "British Virgin Islands": "VGB", "Cayman Islands": "CYM", "Cuba": "CUB",
+                "Antigua and Barbuda": "ATG", "Aruba": "ABW",
+                "Bahamas": "BHS", "Barbados": "BRB", "Cuba": "CUB",
                 "Curaçao": "CUW", "Dominica": "DMA", "Dominican Republic": "DOM",
-                "Grenada": "GRD", "Guadeloupe": "GLP", "Haiti": "HTI", "Jamaica": "JAM",
-                "Martinique": "MTQ", "Montserrat": "MSR", "Puerto Rico": "PRI",
-                "Saint Barthélemy": "BLM", "Saint Kitts and Nevis": "KNA",
-                "Saint Lucia": "LCA", "Saint Martin": "MAF",
-                "Saint Vincent and the Grenadines": "VCT", "Sint Maarten": "SXM",
-                "Trinidad and Tobago": "TTO", "Turks and Caicos Islands": "TCA",
-                "United States Virgin Islands": "VIR"
+                "Grenada": "GRD", "Haiti": "HTI", "Jamaica": "JAM",
+                "Puerto Rico": "PRI", "Saint Kitts and Nevis": "KNA",
+                "Saint Lucia": "LCA", "Saint Vincent and the Grenadines": "VCT",
+                "Trinidad and Tobago": "TTO"
             },
             "Central America": {
                 "Belize": "BLZ", "Costa Rica": "CRI", "El Salvador": "SLV",
@@ -88,51 +135,44 @@ class GlobalCountryManager:
                 "Nicaragua": "NIC", "Panama": "PAN"
             },
             "Northern America": {
-                "Bermuda": "BMU", "Canada": "CAN", "Greenland": "GRL",
-                "Saint Pierre and Miquelon": "SPM", "United States": "USA"
+                "Canada": "CAN", "United States": "USA"
             },
             "South America": {
                 "Argentina": "ARG", "Bolivia": "BOL", "Brazil": "BRA", "Chile": "CHL",
-                "Colombia": "COL", "Ecuador": "ECU", "Falkland Islands": "FLK",
-                "French Guiana": "GUF", "Guyana": "GUY", "Paraguay": "PRY", "Peru": "PER",
+                "Colombia": "COL", "Ecuador": "ECU", "French Guiana": "GUF", 
+                "Guyana": "GUY", "Paraguay": "PRY", "Peru": "PER",
                 "Suriname": "SUR", "Uruguay": "URY", "Venezuela": "VEN"
             }
         },
         "ASIA": {
             "Eastern Asia": {
-                "China": "CHN", "Hong Kong": "HKG", "Macao": "MAC", "Japan": "JPN",
-                "Mongolia": "MNG", "Democratic People's Republic of Korea": "PRK",
-                "Republic of Korea": "KOR", "Taiwan": "TWN"
+                "China": "CHN", "Hong Kong": "HKG", "Japan": "JPN",
+                "Mongolia": "MNG", "North Korea": "PRK",
+                "South Korea": "KOR", "Taiwan": "TWN"
             },
             "Southern Asia": {
                 "Afghanistan": "AFG", "Bangladesh": "BGD", "Bhutan": "BTN", "India": "IND",
                 "Maldives": "MDV", "Nepal": "NPL", "Pakistan": "PAK", "Sri Lanka": "LKA"
             },
             "South-Eastern Asia": {
-                "Brunei Darussalam": "BRN", "Cambodia": "KHM", "Indonesia": "IDN",
-                "Lao People's Democratic Republic": "LAO", "Malaysia": "MYS",
+                "Brunei": "BRN", "Cambodia": "KHM", "Indonesia": "IDN",
+                "Laos": "LAO", "Malaysia": "MYS",
                 "Myanmar": "MMR", "Philippines": "PHL", "Singapore": "SGP",
                 "Thailand": "THA", "Timor-Leste": "TLS", "Vietnam": "VNM"
             },
             "Oceania": {
-                "Australia": "AUS", "Christmas Island": "CXR", "Cocos (Keeling) Islands": "CCK",
-                "Heard Island and McDonald Islands": "HMD", "Norfolk Island": "NFK",
-                "New Zealand": "NZL", "Fiji": "FJI", "New Caledonia": "NCL",
+                "Australia": "AUS", "New Zealand": "NZL", "Fiji": "FJI",
                 "Papua New Guinea": "PNG", "Solomon Islands": "SLB", "Vanuatu": "VUT",
-                "Guam": "GUM", "Kiribati": "KIR", "Marshall Islands": "MHL",
-                "Micronesia (Federated States of)": "FSM", "Nauru": "NRU",
-                "Northern Mariana Islands": "MNP", "Palau": "PLW",
-                "United States Minor Outlying Islands": "UMI", "American Samoa": "ASM",
-                "Cook Islands": "COK", "French Polynesia": "PYF", "Niue": "NIU",
-                "Pitcairn": "PCN", "Samoa": "WSM", "Tokelau": "TKL", "Tonga": "TON",
-                "Tuvalu": "TUV", "Wallis and Futuna": "WLF"
+                "Kiribati": "KIR", "Marshall Islands": "MHL",
+                "Micronesia": "FSM", "Nauru": "NRU", "Palau": "PLW",
+                "Samoa": "WSM", "Tonga": "TON", "Tuvalu": "TUV"
             }
         },
         "MIDDLE_EAST": {
             "Near-East": {
                 "Turkey": "TUR", "Iraq": "IRQ", "Israel": "ISR", "Jordan": "JOR",
-                "Kuwait": "KWT", "Lebanon": "LBN", "State of Palestine": "PSE",
-                "Syrian Arab Republic": "SYR", "Cyprus": "CYP"
+                "Kuwait": "KWT", "Lebanon": "LBN", "Palestine": "PSE",
+                "Syria": "SYR", "Cyprus": "CYP"
             },
             "Far-East": {
                 "Armenia": "ARM", "Azerbaijan": "AZE", "Bahrain": "BHR", "Georgia": "GEO",
@@ -145,23 +185,22 @@ class GlobalCountryManager:
         "EUROPE": {
             "Eastern Europe": {
                 "Belarus": "BLR", "Bulgaria": "BGR", "Czech Republic": "CZE",
-                "Hungary": "HUN", "Poland": "POL", "Republic of Moldova": "MDA",
-                "Romania": "ROU", "Russian Federation": "RUS", "Slovakia": "SVK",
+                "Hungary": "HUN", "Poland": "POL", "Moldova": "MDA",
+                "Romania": "ROU", "Russia": "RUS", "Slovakia": "SVK",
                 "Ukraine": "UKR"
             },
             "Northern Europe": {
-                "Åland Islands": "ALA", "Channel Islands (Guernsey)": "GGY",
-                "Channel Islands (Jersey)": "JEY", "Denmark": "DNK", "Estonia": "EST",
-                "Faroe Islands": "FRO", "Finland": "FIN", "Iceland": "ISL", "Ireland": "IRL",
-                "Isle of Man": "IMN", "Latvia": "LVA", "Lithuania": "LTU", "Norway": "NOR",
-                "Svalbard and Jan Mayen": "SJM", "Sweden": "SWE", "United Kingdom": "GBR"
+                "Denmark": "DNK", "Estonia": "EST", "Finland": "FIN", 
+                "Iceland": "ISL", "Ireland": "IRL", "Latvia": "LVA", 
+                "Lithuania": "LTU", "Norway": "NOR", "Sweden": "SWE", 
+                "United Kingdom": "GBR"
             },
             "Southern Europe": {
                 "Albania": "ALB", "Andorra": "AND", "Bosnia and Herzegovina": "BIH",
-                "Croatia": "HRV", "Gibraltar": "GIB", "Greece": "GRC", "Holy See": "VAT",
-                "Italy": "ITA", "Malta": "MLT", "Montenegro": "MNE", "North Macedonia": "MKD",
+                "Croatia": "HRV", "Greece": "GRC", "Italy": "ITA", 
+                "Malta": "MLT", "Montenegro": "MNE", "North Macedonia": "MKD",
                 "Portugal": "PRT", "San Marino": "SMR", "Serbia": "SRB",
-                "Slovenia": "SVN", "Spain": "ESP"
+                "Slovenia": "SVN", "Spain": "ESP", "Vatican City": "VAT"
             },
             "Western Europe": {
                 "Austria": "AUT", "Belgium": "BEL", "France": "FRA", "Germany": "DEU",
@@ -174,36 +213,31 @@ class GlobalCountryManager:
     # Alternative names and variations
     ALTERNATIVE_NAMES = {
         # Common variations
-        "USA": "USA", "US": "USA", "UNITED STATES OF AMERICA": "USA",
-        "UK": "GBR", "BRITAIN": "GBR", "GREAT BRITAIN": "GBR",
+        "USA": "USA", "US": "USA", "UNITED STATES OF AMERICA": "USA", "UNITED STATES": "USA",
+        "UK": "GBR", "BRITAIN": "GBR", "GREAT BRITAIN": "GBR", "ENGLAND": "GBR",
         "UAE": "ARE", "EMIRATES": "ARE",
-        "DRC": "COD", "DR CONGO": "COD", "CONGO-KINSHASA": "COD",
-        "CONGO-BRAZZAVILLE": "COG", "REPUBLIC OF CONGO": "COG",
-        "IVORY COAST": "CIV", "COTE DIVOIRE": "CIV",
-        "CABO VERDE": "CPV", "CAPE VERDE ISLANDS": "CPV",
+        "DRC": "COD", "DR CONGO": "COD", "CONGO-KINSHASA": "COD", "CONGO KINSHASA": "COD",
+        "CONGO-BRAZZAVILLE": "COG", "REPUBLIC OF CONGO": "COG", "CONGO BRAZZAVILLE": "COG",
+        "IVORY COAST": "CIV", "COTE DIVOIRE": "CIV", "COTE D'IVOIRE": "CIV",
+        "CABO VERDE": "CPV", "CAPE VERDE": "CPV", "CAPE VERDE ISLANDS": "CPV",
         "CZECHIA": "CZE", "CZECH": "CZE",
-        "NORTH KOREA": "PRK", "DPRK": "PRK",
-        "SOUTH KOREA": "KOR", "ROK": "KOR", "KOREA": "KOR",
-        "PALESTINE": "PSE", "PALESTINIAN TERRITORIES": "PSE",
-        "SYRIA": "SYR", "IRAN (ISLAMIC REPUBLIC OF)": "IRN",
-        "RUSSIA": "RUS", "RUSSIAN FED": "RUS",
+        "NORTH KOREA": "PRK", "DPRK": "PRK", "DEMOCRATIC PEOPLE'S REPUBLIC OF KOREA": "PRK",
+        "SOUTH KOREA": "KOR", "ROK": "KOR", "KOREA": "KOR", "REPUBLIC OF KOREA": "KOR",
+        "PALESTINE": "PSE", "PALESTINIAN TERRITORIES": "PSE", "STATE OF PALESTINE": "PSE",
+        "SYRIA": "SYR", "SYRIAN ARAB REPUBLIC": "SYR",
+        "RUSSIA": "RUS", "RUSSIAN FED": "RUS", "RUSSIAN FEDERATION": "RUS",
         "VIETNAM": "VNM", "VIET NAM": "VNM",
-        "LAOS": "LAO", "LAO PDR": "LAO",
-        "BRUNEI": "BRN", "MYANMAR (BURMA)": "MMR", "BURMA": "MMR",
-        "EAST TIMOR": "TLS", "TIMOR LESTE": "TLS",
-        "SWAZILAND": "SWZ", "KINGDOM OF ESWATINI": "SWZ",
-        "MACEDONIA": "MKD", "NORTH MACEDONIA (FYROM)": "MKD", "FYROM": "MKD",
-        "VATICAN CITY": "VAT", "VATICAN": "VAT", "HOLY SEE (VATICAN CITY)": "VAT",
+        "LAOS": "LAO", "LAO PDR": "LAO", "LAO PEOPLE'S DEMOCRATIC REPUBLIC": "LAO",
+        "BRUNEI": "BRN", "BRUNEI DARUSSALAM": "BRN",
+        "MYANMAR": "MMR", "BURMA": "MMR",
+        "TIMOR-LESTE": "TLS", "EAST TIMOR": "TLS", "TIMOR LESTE": "TLS",
+        "MACEDONIA": "MKD", "NORTH MACEDONIA": "MKD", "FYROM": "MKD",
+        "SWAZILAND": "SWZ", "KINGDOM OF ESWATINI": "SWZ", "ESWATINI": "SWZ",
+        "MICRONESIA": "FSM", "FEDERATED STATES OF MICRONESIA": "FSM",
+        "SAO TOME": "STP", "SAO TOME AND PRINCIPE": "STP", "SÃO TOMÉ AND PRÍNCIPE": "STP",
+        "NETHERLANDS": "NLD", "HOLLAND": "NLD",
         "BOSNIA": "BIH", "BOSNIA-HERZEGOVINA": "BIH",
-        "MICRONESIA": "FSM", "FSM": "FSM",
-        "SAO TOME": "STP", "SAO TOME AND PRINCIPE": "STP",
-        "GUINEA BISSAU": "GNB", "GUINEE-BISSAU": "GNB",
-        "VIRGIN ISLANDS": "VIR", "US VIRGIN ISLANDS": "VIR", "USVI": "VIR",
-        "BVI": "VGB", "BRITISH VIRGIN ISLANDS": "VGB",
-        "NETHERLAND ANTILLES": "BES", "DUTCH CARIBBEAN": "BES",
-        "ST KITTS": "KNA", "ST LUCIA": "LCA", "ST VINCENT": "VCT",
-        "ST MARTIN": "MAF", "SAINT MARTIN (FRENCH)": "MAF",
-        "SINT MAARTEN": "SXM", "ST MAARTEN": "SXM", "SAINT MARTIN (DUTCH)": "SXM"
+        "VATICAN": "VAT", "VATICAN CITY": "VAT", "HOLY SEE": "VAT"
     }
     
     def __init__(self):
@@ -251,7 +285,7 @@ class GlobalCountryManager:
         if value_clean in ['NONE', 'NULL', 'N/A', 'UNKNOWN', '']:
             return None
         
-        # Direct ISO3 match
+        # Direct ISO3 match (e.g., "USA", "GBR", "FRA")
         if len(value_clean) == 3 and value_clean.isalpha() and value_clean in self.all_iso3_codes:
             return value_clean
         
@@ -270,7 +304,8 @@ class GlobalCountryManager:
             "US": "USA", "GB": "GBR", "FR": "FRA", "DE": "DEU", "IT": "ITA",
             "ES": "ESP", "CA": "CAN", "AU": "AUS", "JP": "JPN", "CN": "CHN",
             "IN": "IND", "BR": "BRA", "MX": "MEX", "ZA": "ZAF", "NG": "NGA",
-            "EG": "EGY", "KE": "KEN", "SA": "SAU", "AE": "ARE", "IL": "ISR"
+            "EG": "EGY", "KE": "KEN", "SA": "SAU", "AE": "ARE", "IL": "ISR",
+            "TR": "TUR", "PL": "POL", "NL": "NLD", "BE": "BEL", "CH": "CHE"
         }
         if len(value_clean) == 2 and value_clean in iso2_to_iso3:
             return iso2_to_iso3[value_clean]
@@ -336,41 +371,29 @@ class GlobalConfig:
         "Contract%20Opportunities/Archived%20Data/"
     )
     
-    # SAM.gov column names (same as original)
+    # Alternative S3 URLs (fallback)
+    s3_current_url: str = (
+        "https://falextracts.s3.amazonaws.com/Contract%20Opportunities/datagov/"
+        "ContractOpportunitiesFullCSV.csv"
+    )
+    
+    s3_archive_base: str = (
+        "https://falextracts.s3.amazonaws.com/Contract%20Opportunities/Archived%20Data/"
+    )
+    
+    # SAM.gov column names
     sam_columns: Dict[str, str] = field(default_factory=lambda: {
         "NoticeId": "The ID of the notice",
         "Title": "The title of the opportunity",
         "Sol#": "The number of the solicitation",
         "Department/Ind.Agency": "The department (L1)",
-        "CGAC": "Common Governmentwide Accounting Classification",
-        "Sub-Tier": "The sub-tier (L2)",
-        "FPDS Code": "Federal Procurement Data System code",
-        "Office": "The office (L3)",
-        "AAC Code": "Activity Address Code",
         "PostedDate": "Date posted (YYYY-MM-DD) (HH-MM-SS)",
         "Type": "The opportunity's current type",
-        "BaseType": "The opportunity's original type",
-        "ArchiveType": "Archive type",
-        "ArchiveDate": "Date archived",
-        "SetASideCode": "Set aside code",
-        "SetASide": "Description of the set aside",
-        "ResponseDeadLine": "Deadline date to respond",
-        "NaicsCode": "NAICS code",
-        "ClassificationCode": "Classification code",
-        "PopStreetAddress": "Place of performance street address",
+        "PopCountry": "Place of performance country",
         "PopCity": "Place of performance city",
         "PopState": "Place of performance state",
-        "PopZip": "Place of performance zip",
-        "PopCountry": "Place of performance country",
         "Active": "If Active = Yes, then opportunity is active",
-        "AwardNumber": "The award number",
-        "AwardDate": "Date the opportunity was awarded",
-        "Award$": "Monetary amount of the award",
-        "Awardee": "Name and location of the awardee",
-        "PrimaryContactTitle": "Title of the primary contact",
-        "PrimaryContactFullName": "Primary contact's full name",
-        "PrimaryContactEmail": "Primary contact's email",
-        "PrimaryContactPhone": "Primary contact's phone number",
+        "ResponseDeadLine": "Deadline date to respond",
         "Link": "The direct UI link to the opportunity",
         "Description": "Description of the opportunity"
     })
@@ -430,39 +453,17 @@ class GlobalDatabaseManager:
                     Title TEXT,
                     "Sol#" TEXT,
                     "Department/Ind.Agency" TEXT,
-                    CGAC TEXT,
-                    "Sub-Tier" TEXT,
-                    "FPDS Code" TEXT,
-                    Office TEXT,
-                    "AAC Code" TEXT,
                     PostedDate TEXT,
                     PostedDate_normalized DATE,
                     Type TEXT,
-                    BaseType TEXT,
-                    ArchiveType TEXT,
-                    ArchiveDate TEXT,
-                    SetASideCode TEXT,
-                    SetASide TEXT,
-                    ResponseDeadLine TEXT,
-                    NaicsCode TEXT,
-                    ClassificationCode TEXT,
-                    PopStreetAddress TEXT,
-                    PopCity TEXT,
-                    PopState TEXT,
-                    PopZip TEXT,
                     PopCountry TEXT,
                     PopCountry_ISO3 TEXT,
                     Geographic_Region TEXT,
                     Geographic_SubRegion TEXT,
+                    PopCity TEXT,
+                    PopState TEXT,
                     Active TEXT,
-                    AwardNumber TEXT,
-                    AwardDate TEXT,
-                    "Award$" TEXT,
-                    Awardee TEXT,
-                    PrimaryContactTitle TEXT,
-                    PrimaryContactFullName TEXT,
-                    PrimaryContactEmail TEXT,
-                    PrimaryContactPhone TEXT,
+                    ResponseDeadLine TEXT,
                     Link TEXT,
                     Description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -480,7 +481,6 @@ class GlobalDatabaseManager:
                 "CREATE INDEX idx_region ON opportunities(Geographic_Region)",
                 "CREATE INDEX idx_subregion ON opportunities(Geographic_SubRegion)",
                 "CREATE INDEX idx_active ON opportunities(Active)",
-                "CREATE INDEX idx_type ON opportunities(Type)",
                 "CREATE INDEX idx_region_date ON opportunities(Geographic_Region, PostedDate_normalized DESC)"
             ]
             
@@ -552,7 +552,7 @@ class GlobalDatabaseManager:
                     region, subregion = None, None
                 
                 # Check if exists
-                cur.execute("SELECT PostedDate FROM opportunities WHERE NoticeId = ?", (notice_id,))
+                cur.execute("SELECT id FROM opportunities WHERE NoticeId = ?", (notice_id,))
                 existing = cur.fetchone()
                 
                 if not existing:
@@ -572,9 +572,11 @@ class GlobalDatabaseManager:
                     values.append(std_country)
                     
                     # Add other columns
-                    for col in self.config.sam_columns.keys():
-                        if col not in ['NoticeId', 'PopCountry'] and col in row.index:
-                            if self.needs_quoting(col):
+                    for col in ['Title', 'Department/Ind.Agency', 'PostedDate', 'Type', 
+                               'PopCity', 'PopState', 'Active', 'ResponseDeadLine', 
+                               'Link', 'Description', 'Sol#']:
+                        if col in row.index:
+                            if col == 'Department/Ind.Agency' or col == 'Sol#':
                                 columns.append(f'"{col}"')
                             else:
                                 columns.append(col)
@@ -594,79 +596,11 @@ class GlobalDatabaseManager:
                         logger.error(f"Insert error for {notice_id}: {e}")
                         skipped += 1
                 else:
-                    skipped += 1  # For now, skip updates for simplicity
+                    skipped += 1  # For simplicity, skip updates
             
             conn.commit()
         
-        logger.info(f"Batch from {source}: {inserted} inserted, {updated} updated, {skipped} skipped")
+        if inserted > 0 or updated > 0:
+            logger.info(f"Batch from {source}: {inserted} inserted, {updated} updated, {skipped} skipped")
+        
         return inserted, updated, skipped
-    
-    def needs_quoting(self, column_name: str) -> bool:
-        """Check if column name needs quoting"""
-        special_chars = ['/', '#', '$', '-', ' ', '.', '(', ')', '[', ']']
-        return any(char in column_name for char in special_chars)
-    
-    def get_statistics_by_region(self) -> Dict[str, Any]:
-        """Get statistics organized by region"""
-        stats = {
-            'total_records': 0,
-            'by_region': {},
-            'by_subregion': {},
-            'recent_by_region': {}
-        }
-        
-        if not self.db_path.exists():
-            return stats
-        
-        try:
-            with self.get_connection() as conn:
-                cur = conn.cursor()
-                
-                # Total records
-                cur.execute("SELECT COUNT(*) FROM opportunities")
-                stats['total_records'] = cur.fetchone()[0]
-                
-                # By region
-                cur.execute("""
-                    SELECT Geographic_Region, COUNT(*) 
-                    FROM opportunities 
-                    WHERE Geographic_Region IS NOT NULL 
-                    GROUP BY Geographic_Region
-                """)
-                stats['by_region'] = dict(cur.fetchall())
-                
-                # By sub-region
-                cur.execute("""
-                    SELECT Geographic_Region, Geographic_SubRegion, COUNT(*) 
-                    FROM opportunities 
-                    WHERE Geographic_SubRegion IS NOT NULL 
-                    GROUP BY Geographic_Region, Geographic_SubRegion
-                """)
-                for region, subregion, count in cur.fetchall():
-                    if region not in stats['by_subregion']:
-                        stats['by_subregion'][region] = {}
-                    stats['by_subregion'][region][subregion] = count
-                
-                # Recent by region (last 30 days)
-                cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-                cur.execute("""
-                    SELECT Geographic_Region, COUNT(*) 
-                    FROM opportunities 
-                    WHERE Geographic_Region IS NOT NULL 
-                      AND PostedDate_normalized >= ?
-                    GROUP BY Geographic_Region
-                """, (cutoff,))
-                stats['recent_by_region'] = dict(cur.fetchall())
-                
-        except Exception as e:
-            logger.error(f"Error getting statistics: {e}")
-        
-        return stats
-
-
-# Continue with DataProcessor, HTTPClient, CSVReader classes...
-# (These would be similar to your original but work with GlobalCountryManager)
-
-# Note: The rest of the utility classes (DataProcessor, HTTPClient, CSVReader) 
-# would be very similar to your original sam_utils.py but using GlobalCountryManager
-# instead of AfricanCountryManager
