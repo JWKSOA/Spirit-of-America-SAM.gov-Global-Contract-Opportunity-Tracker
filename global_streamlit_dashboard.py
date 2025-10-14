@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-global_streamlit_dashboard_improved.py - Enhanced Spirit of America Global Dashboard
-Fixed heatmaps and comprehensive sidebar statistics
+global_streamlit_dashboard.py - Fixed version with comprehensive sidebar statistics and working heatmaps
+Complete Spirit of America Global Dashboard with all regions and sub-regions
 """
 
 import os
@@ -9,7 +9,6 @@ import sys
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
-import json
 
 import pandas as pd
 import plotly.express as px
@@ -24,7 +23,7 @@ st.set_page_config(
     page_title="🌐 Spirit of America: SAM.gov Global Contract Opportunity Tracker",
     page_icon="🌐",
     layout="wide",
-    initial_sidebar_state="expanded"  # Changed to expanded
+    initial_sidebar_state="expanded"
 )
 
 # Import global utilities
@@ -111,8 +110,8 @@ def load_complete_statistics() -> dict:
         return {}
 
 @st.cache_data(ttl=300)
-def load_region_data_with_countries(region: str) -> pd.DataFrame:
-    """Load data for a region with proper country identification"""
+def load_region_data(region: str) -> pd.DataFrame:
+    """Load data for a specific region"""
     system = init_system()
     if not system:
         return pd.DataFrame()
@@ -189,28 +188,21 @@ def load_subregion_data(region: str, subregion: str) -> pd.DataFrame:
 # Visualization Functions
 # ============================================================================
 
-def create_enhanced_region_heatmap(df: pd.DataFrame, region: str) -> go.Figure:
-    """Create enhanced heatmap with proper country data"""
-    if df.empty:
+def create_region_heatmap(df: pd.DataFrame, region: str) -> go.Figure:
+    """Create heatmap visualization for a region"""
+    if df.empty or 'PopCountry_ISO3' not in df.columns:
         return go.Figure().add_annotation(
             text="No data available for heatmap",
             showarrow=False,
             font=dict(size=20)
         )
     
-    # Group by ISO3 code for proper mapping
-    if 'PopCountry_ISO3' in df.columns:
-        country_summary = df[df['PopCountry_ISO3'].notna()].groupby('PopCountry_ISO3').agg({
-            'NoticeId': 'count',
-            'PopCountry': 'first'
-        }).reset_index()
-        country_summary.columns = ['ISO3', 'Opportunities', 'Country_Name']
-    else:
-        return go.Figure().add_annotation(
-            text="Country data not properly formatted",
-            showarrow=False,
-            font=dict(size=20)
-        )
+    # Group by ISO3 code
+    country_summary = df[df['PopCountry_ISO3'].notna()].groupby('PopCountry_ISO3').agg({
+        'NoticeId': 'count',
+        'PopCountry': 'first'
+    }).reset_index()
+    country_summary.columns = ['ISO3', 'Opportunities', 'Country_Name']
     
     if country_summary.empty:
         return go.Figure().add_annotation(
@@ -267,13 +259,11 @@ def create_country_ranking_chart(df: pd.DataFrame, region: str, top_n: int = 10)
     if df.empty or 'PopCountry' not in df.columns:
         return go.Figure()
     
-    # Count opportunities by country
     country_counts = df['PopCountry'].value_counts().head(top_n)
     
     if country_counts.empty:
         return go.Figure()
     
-    # Create bar chart
     fig = px.bar(
         x=country_counts.values,
         y=country_counts.index,
@@ -301,7 +291,6 @@ def create_timeline_chart(df: pd.DataFrame, title: str) -> go.Figure:
     if valid_dates.empty:
         return go.Figure()
     
-    # Group by date
     timeline = valid_dates.groupby(valid_dates['PostedDate_parsed'].dt.date).size().reset_index()
     timeline.columns = ['Date', 'Count']
     
@@ -333,7 +322,7 @@ def create_subregion_pie_chart(stats: dict, region: str) -> go.Figure:
         values=list(subregion_data.values()),
         names=list(subregion_data.keys()),
         title="Distribution by Sub-Region",
-        hole=0.4  # Make it a donut chart
+        hole=0.4
     )
     
     fig.update_traces(
@@ -360,11 +349,11 @@ def create_subregion_pie_chart(stats: dict, region: str) -> go.Figure:
     return fig
 
 # ============================================================================
-# Sidebar Statistics Display
+# Comprehensive Sidebar Statistics Display
 # ============================================================================
 
 def display_comprehensive_sidebar_stats():
-    """Display comprehensive statistics in sidebar as requested"""
+    """Display comprehensive statistics in sidebar"""
     stats = load_complete_statistics()
     
     if not stats:
@@ -400,27 +389,28 @@ def display_comprehensive_sidebar_stats():
             # Sort sub-regions by count (descending)
             sorted_subregions = sorted(subregions.items(), key=lambda x: x[1], reverse=True)
             
-            # Display each sub-region
+            # Display each sub-region with numbering
             for idx, (subregion, count) in enumerate(sorted_subregions, 1):
                 st.sidebar.markdown(f"({idx}) **{subregion}:** {count:,} contracts")
         
         st.sidebar.markdown("")  # Add spacing between regions
 
 # ============================================================================
-# Main Region Display
+# Main Region Display with Heatmap and Country Count
 # ============================================================================
 
-def display_enhanced_region_overview(region: str):
-    """Display enhanced overview with working heatmap and statistics"""
+def display_region_overview(region: str):
+    """Display overview with working heatmap and PopCountry count"""
     
     # Load data
-    df_region = load_region_data_with_countries(region)
+    df_region = load_region_data(region)
     
     if df_region.empty:
         st.warning(f"No data available for {region.replace('_', ' ').title()}")
+        st.info("Please run the bootstrap script to load data for this region")
         return
     
-    # Display metrics
+    # Display metrics including PopCountry count
     st.markdown(f"### 📊 {region.replace('_', ' ').title()} Overview")
     
     col1, col2, col3, col4 = st.columns(4)
@@ -430,8 +420,9 @@ def display_enhanced_region_overview(region: str):
         st.metric("Total Opportunities", f"{total:,}")
     
     with col2:
+        # PopCountry count - FIXED
         unique_countries = df_region['PopCountry'].nunique() if 'PopCountry' in df_region.columns else 0
-        st.metric("Countries", f"{unique_countries}")
+        st.metric("Countries (PopCountry)", f"{unique_countries}")
     
     with col3:
         unique_agencies = df_region['Department'].nunique() if 'Department' in df_region.columns else 0
@@ -454,9 +445,9 @@ def display_enhanced_region_overview(region: str):
     col1, col2 = st.columns(2)
     
     with col1:
-        # Enhanced heatmap
+        # Heatmap - FIXED
         st.markdown("#### 🗺️ Geographic Distribution")
-        heatmap_fig = create_enhanced_region_heatmap(df_region, region)
+        heatmap_fig = create_region_heatmap(df_region, region)
         st.plotly_chart(heatmap_fig, use_container_width=True)
     
     with col2:
@@ -511,6 +502,7 @@ def display_subregion_content(region: str, subregion: str):
     
     if df.empty:
         st.warning(f"No data available for {subregion}")
+        st.info("Please run the bootstrap script to load data for this sub-region")
         return
     
     # Metrics
@@ -641,8 +633,8 @@ def main():
         with region_tab:
             region_key = region_map[idx]
             
-            # Display enhanced region overview with working heatmap
-            display_enhanced_region_overview(region_key)
+            # Display region overview with heatmap and PopCountry count
+            display_region_overview(region_key)
             
             # Get sub-regions for this region
             subregions = list(system['country_manager'].GEOGRAPHIC_REGIONS[region_key].keys())
@@ -658,6 +650,7 @@ def main():
                     with sub_tab:
                         subregion_name = subregions[sub_idx]
                         display_subregion_content(region_key, subregion_name)
+
 
 if __name__ == "__main__":
     main()

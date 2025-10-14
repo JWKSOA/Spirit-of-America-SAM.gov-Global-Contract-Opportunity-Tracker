@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-global_bootstrap_optimized.py - Optimized bootstrap that processes data by sub-region
-Handles massive SAM.gov data by breaking it down into manageable chunks
+global_bootstrap.py - Fixed version with proper sub-region processing
+Processes SAM.gov data by sub-region to handle massive global dataset
+Based on successful Africa dashboard approach
 """
 
 import os
@@ -10,15 +11,10 @@ import logging
 import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, List, Tuple, Dict
-import json
+import pandas as pd
 import time
 import gc
-
-import pandas as pd
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import json
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,17 +26,17 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('global_bootstrap_optimized.log'),
+        logging.FileHandler('global_bootstrap.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-class OptimizedGlobalBootstrap:
-    """Optimized bootstrap that processes by sub-region to handle massive data"""
+
+class GlobalBootstrap:
+    """Bootstrap SAM.gov data by processing each sub-region separately"""
     
     def __init__(self):
-        """Initialize optimized bootstrap system"""
         self.config = GlobalConfig()
         self.country_manager = GlobalCountryManager()
         self.db_manager = GlobalDatabaseManager(self.config, self.country_manager)
@@ -54,31 +50,13 @@ class OptimizedGlobalBootstrap:
             'by_region': {},
             'by_subregion': {},
             'total_processed': 0,
-            'total_found': 0
+            'total_found': 0,
+            'total_inserted': 0
         }
         
-        # HTTP session
-        self.session = self._create_session()
-        
         # Memory optimization
-        self.chunk_size = 5000  # Smaller chunks for memory efficiency
-    
-    def _create_session(self) -> requests.Session:
-        """Create HTTP session with retry logic"""
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        return session
-    
+        self.chunk_size = 5000  # Process in smaller chunks
+        
     def _load_progress(self) -> dict:
         """Load progress from file"""
         if self.progress_file.exists():
@@ -103,56 +81,26 @@ class OptimizedGlobalBootstrap:
         except Exception as e:
             logger.error(f"Could not save progress: {e}")
     
-    def clear_and_init_database(self):
-        """Clear and initialize database"""
+    def initialize_database(self):
+        """Initialize or clear database"""
         logger.info("Initializing database...")
         
-        if self.config.db_path.exists():
-            self.config.db_path.unlink()
+        if not self.config.db_path.exists():
+            self.config.data_dir.mkdir(parents=True, exist_ok=True)
         
         self.db_manager.initialize_database()
-        
-        # Clear progress
-        if self.progress_file.exists():
-            self.progress_file.unlink()
-        self.completed_segments = {}
-        
         logger.info("Database initialized")
     
-    def get_subregion_countries(self, region: str, subregion: str) -> List[str]:
-        """Get all country variations for a sub-region"""
-        countries = []
-        
-        # Get the countries for this sub-region
-        subregion_data = self.country_manager.GEOGRAPHIC_REGIONS.get(region, {}).get(subregion, {})
-        
-        for country_name, iso3 in subregion_data.items():
-            # Add the main country name
-            countries.append(country_name.upper())
-            countries.append(iso3)
-            
-            # Add common variations
-            countries.append(country_name.lower())
-            countries.append(country_name.replace("'", ""))
-            countries.append(country_name.replace("-", " "))
-            
-            # Add from alternative names
-            for alt_name, alt_iso3 in self.country_manager.ALTERNATIVE_NAMES.items():
-                if alt_iso3 == iso3:
-                    countries.append(alt_name.upper())
-        
-        return list(set(countries))  # Remove duplicates
-    
-    def process_csv_for_subregion(self, df: pd.DataFrame, region: str, subregion: str) -> pd.DataFrame:
-        """Filter DataFrame for specific sub-region countries"""
+    def filter_for_subregion(self, df: pd.DataFrame, region: str, subregion: str) -> pd.DataFrame:
+        """Filter dataframe for specific sub-region countries"""
         if df.empty or 'PopCountry' not in df.columns:
             return pd.DataFrame()
         
-        # Get all country variations for this sub-region
-        target_countries = self.get_subregion_countries(region, subregion)
+        # Get countries for this sub-region
+        target_countries = self.country_manager.get_countries_by_subregion(region, subregion)
         
-        # Find matching rows
-        matching_rows = []
+        # Filter rows
+        filtered_rows = []
         for idx, row in df.iterrows():
             pop_country = str(row.get('PopCountry', '')).strip()
             if not pop_country:
@@ -160,22 +108,29 @@ class OptimizedGlobalBootstrap:
             
             # Check if this country belongs to our sub-region
             iso3 = self.country_manager.identify_country(pop_country)
-            if iso3:
-                region_info = self.country_manager.get_region(iso3)
-                if region_info and region_info[0] == region and region_info[1] == subregion:
-                    matching_rows.append(idx)
+            if iso3 and iso3 in target_countries:
+                filtered_rows.append(idx)
         
-        if matching_rows:
-            return df.loc[matching_rows].copy()
+        if filtered_rows:
+            return df.loc[filtered_rows].copy()
         
         return pd.DataFrame()
     
     def download_file(self, url: str, dest_path: Path) -> bool:
-        """Download file with progress"""
+        """Download file with retry logic"""
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        session = requests.Session()
+        retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        
         try:
             logger.info(f"Downloading from {url}")
-            
-            response = self.session.get(url, stream=True, timeout=300)
+            response = session.get(url, stream=True, timeout=300)
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
@@ -197,7 +152,7 @@ class OptimizedGlobalBootstrap:
             logger.error(f"Download failed: {e}")
             
             # Try S3 fallback
-            if "sam.gov" in url and "s3.amazonaws.com" not in url:
+            if "sam.gov" in url:
                 s3_url = url.replace(
                     "https://sam.gov/api/prod/fileextractservices/v1/api/download/",
                     "https://falextracts.s3.amazonaws.com/"
@@ -208,30 +163,29 @@ class OptimizedGlobalBootstrap:
             
             return False
     
-    def process_year_for_subregion(self, year: int, region: str, subregion: str) -> Tuple[int, int]:
+    def process_year_for_subregion(self, year: int, region: str, subregion: str) -> tuple:
         """Process a single year for a specific sub-region"""
         segment_key = f"{region}_{subregion}_FY{year}"
         
-        # Check if already processed
+        # Check if already processed successfully
         if segment_key in self.completed_segments:
             if self.completed_segments[segment_key].get('status') == 'completed':
                 logger.info(f"  Skipping {segment_key} - already completed")
-                return 0, 0
+                stats = self.completed_segments[segment_key].get('stats', {})
+                return stats.get('total_found', 0), stats.get('total_inserted', 0)
         
         logger.info(f"  Processing FY{year} for {subregion}...")
         
-        # Determine source
+        # Determine URL
         if year == datetime.now().year or year == datetime.now().year + 1:
-            # Current data
             url = self.config.current_csv_url
             source_key = f"CURRENT_{region}_{subregion}"
         else:
-            # Archive data
             url = f"{self.config.archive_base_url}FY{year}_archived_opportunities.csv?privacy=Public"
             source_key = f"FY{year}_{region}_{subregion}"
         
-        inserted = 0
         found = 0
+        inserted = 0
         
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / f"FY{year}.csv"
@@ -239,7 +193,7 @@ class OptimizedGlobalBootstrap:
             # Download file
             if not self.download_file(url, csv_path):
                 logger.warning(f"    Could not download FY{year}")
-                self._save_progress(segment_key, "not_found")
+                self._save_progress(segment_key, "download_failed")
                 return 0, 0
             
             # Process CSV in chunks
@@ -250,7 +204,7 @@ class OptimizedGlobalBootstrap:
                     chunk_num += 1
                     
                     # Filter for this sub-region
-                    subregion_data = self.process_csv_for_subregion(chunk, region, subregion)
+                    subregion_data = self.filter_for_subregion(chunk, region, subregion)
                     
                     if not subregion_data.empty:
                         found += len(subregion_data)
@@ -265,23 +219,24 @@ class OptimizedGlobalBootstrap:
                         if chunk_num % 20 == 0:
                             logger.info(f"    Chunk {chunk_num}: {found} found, {inserted} inserted")
                     
-                    # Clear memory periodically
+                    # Clean memory periodically
                     if chunk_num % 50 == 0:
                         gc.collect()
                 
                 logger.info(f"    FY{year} complete: {found} found, {inserted} inserted")
                 
                 # Update statistics
+                self.stats['total_found'] += found
+                self.stats['total_inserted'] += inserted
+                
                 if region not in self.stats['by_region']:
                     self.stats['by_region'][region] = 0
                 self.stats['by_region'][region] += inserted
                 
-                if subregion not in self.stats['by_subregion']:
-                    self.stats['by_subregion'][subregion] = 0
-                self.stats['by_subregion'][subregion] += inserted
-                
-                self.stats['total_processed'] += 1
-                self.stats['total_found'] += found
+                subregion_key = f"{region}_{subregion}"
+                if subregion_key not in self.stats['by_subregion']:
+                    self.stats['by_subregion'][subregion_key] = 0
+                self.stats['by_subregion'][subregion_key] += inserted
                 
                 # Save progress
                 self._save_progress(segment_key, "completed")
@@ -296,7 +251,7 @@ class OptimizedGlobalBootstrap:
         return found, inserted
     
     def process_subregion(self, region: str, subregion: str, 
-                         start_year: int, end_year: int) -> Dict[str, int]:
+                         start_year: int, end_year: int) -> dict:
         """Process all years for a specific sub-region"""
         logger.info(f"\n{'='*60}")
         logger.info(f"Processing {region} - {subregion}")
@@ -324,17 +279,16 @@ class OptimizedGlobalBootstrap:
     
     def run_by_subregion(self, target_region: str = None, target_subregion: str = None,
                         start_year: int = None, end_year: int = None,
-                        year_increment: int = 5, clear_first: bool = False):
+                        year_increment: int = 5):
         """
-        Run bootstrap for specific sub-regions with year increments
+        Main bootstrap process - run by sub-region with year increments
         
         Args:
             target_region: Specific region to process (e.g., 'AFRICA')
-            target_subregion: Specific sub-region to process
+            target_subregion: Specific sub-region to process  
             start_year: First year to process
             end_year: Last year to process
             year_increment: Process years in chunks of this size
-            clear_first: Whether to clear database first
         """
         start_time = datetime.now()
         
@@ -347,17 +301,14 @@ class OptimizedGlobalBootstrap:
             start_year = end_year - 4  # Default to last 5 years
         
         logger.info("="*60)
-        logger.info("Optimized Global SAM.gov Bootstrap")
-        logger.info(f"Processing by Sub-Region")
+        logger.info("Global SAM.gov Bootstrap by Sub-Region")
         logger.info(f"Years: FY{start_year} to FY{end_year}")
         logger.info(f"Year Increment: {year_increment}")
         logger.info("="*60)
         
         # Initialize database if needed
-        if clear_first:
-            self.clear_and_init_database()
-        elif not self.config.db_path.exists():
-            self.db_manager.initialize_database()
+        if not self.config.db_path.exists():
+            self.initialize_database()
         
         # Determine what to process
         regions_to_process = {}
@@ -403,11 +354,11 @@ class OptimizedGlobalBootstrap:
         elapsed = datetime.now() - start_time
         
         logger.info("\n" + "="*60)
-        logger.info("OPTIMIZED BOOTSTRAP COMPLETE!")
+        logger.info("BOOTSTRAP COMPLETE!")
         logger.info("="*60)
         logger.info(f"Time elapsed: {elapsed}")
-        logger.info(f"Total segments processed: {self.stats['total_processed']}")
         logger.info(f"Total opportunities found: {self.stats['total_found']:,}")
+        logger.info(f"Total inserted: {self.stats['total_inserted']:,}")
         
         if self.stats['by_region']:
             logger.info("\n📊 Inserted by region:")
@@ -422,7 +373,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Optimized Global SAM.gov Bootstrap by Sub-Region"
+        description="Global SAM.gov Bootstrap by Sub-Region"
     )
     parser.add_argument(
         "--region",
@@ -471,7 +422,15 @@ def main():
         args.year_increment = 3
     
     # Create bootstrap instance
-    bootstrap = OptimizedGlobalBootstrap()
+    bootstrap = GlobalBootstrap()
+    
+    # Clear database if requested
+    if args.clear:
+        bootstrap.initialize_database()
+        # Clear progress
+        if bootstrap.progress_file.exists():
+            bootstrap.progress_file.unlink()
+        bootstrap.completed_segments = {}
     
     # Run bootstrap
     bootstrap.run_by_subregion(
@@ -479,8 +438,7 @@ def main():
         target_subregion=args.subregion,
         start_year=args.start_year,
         end_year=args.end_year,
-        year_increment=args.year_increment,
-        clear_first=args.clear
+        year_increment=args.year_increment
     )
 
 

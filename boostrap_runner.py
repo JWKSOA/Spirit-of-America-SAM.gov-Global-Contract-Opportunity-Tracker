@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-run_bootstrap_by_region.py - Simple runner for bootstrapping by region/subregion
-Makes it easy to run the optimized bootstrap for specific regions
+bootstrap_runner.py - Easy menu-based bootstrap runner for processing by sub-region
+Makes it simple to bootstrap data one sub-region at a time
 """
 
 import os
@@ -11,22 +11,22 @@ from datetime import datetime
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from global_bootstrap import OptimizedGlobalBootstrap
+from global_bootstrap import GlobalBootstrap
 
 def print_menu():
     """Print menu options"""
     print("\n" + "="*60)
-    print("SAM.gov Global Bootstrap - Region Selector")
+    print("SAM.gov Global Bootstrap - Sub-Region Runner")
     print("="*60)
     print("\nSelect what to bootstrap:")
     print("\n1. QUICK START (Last 2 years, all regions)")
-    print("\n--- BY REGION ---")
-    print("2. AFRICA (All sub-regions)")
-    print("3. AMERICAS (All sub-regions)") 
-    print("4. ASIA (All sub-regions)")
-    print("5. MIDDLE_EAST (All sub-regions)")
-    print("6. EUROPE (All sub-regions)")
-    print("\n--- BY SUB-REGION ---")
+    print("\n--- BY REGION (All Sub-Regions) ---")
+    print("2. AFRICA (All 5 sub-regions)")
+    print("3. AMERICAS (All 4 sub-regions)") 
+    print("4. ASIA (All 4 sub-regions)")
+    print("5. MIDDLE_EAST (All 2 sub-regions)")
+    print("6. EUROPE (All 4 sub-regions)")
+    print("\n--- BY INDIVIDUAL SUB-REGION ---")
     print("7. Select specific sub-region")
     print("\n--- FULL HISTORY ---")
     print("8. FULL HISTORICAL (1998-present, all regions)")
@@ -53,7 +53,9 @@ def select_subregion():
             print(f"\n--- SUB-REGIONS IN {selected_region} ---")
             subregions = list(cm.GEOGRAPHIC_REGIONS[selected_region].keys())
             for i, subregion in enumerate(subregions, 1):
-                print(f"{i}. {subregion}")
+                # Count countries in this sub-region
+                countries = cm.GEOGRAPHIC_REGIONS[selected_region][subregion]
+                print(f"{i}. {subregion} ({len(countries)} countries)")
             
             sub_idx = int(input("\nSelect sub-region number: ")) - 1
             if 0 <= sub_idx < len(subregions):
@@ -75,17 +77,25 @@ def main():
                 print("\nExiting...")
                 break
             
-            bootstrap = OptimizedGlobalBootstrap()
+            bootstrap = GlobalBootstrap()
             current_year = datetime.now().year
             
             if choice == "1":
                 # Quick start - last 2 years
                 print("\n🚀 QUICK START: Processing last 2 years for all regions...")
+                print("This will process each sub-region individually")
+                
+                # Clear database first
+                confirm = input("Clear existing database? (yes/no): ").lower()
+                if confirm == "yes":
+                    bootstrap.initialize_database()
+                    if bootstrap.progress_file.exists():
+                        bootstrap.progress_file.unlink()
+                
                 bootstrap.run_by_subregion(
                     start_year=current_year - 1,
                     end_year=current_year + 1,
-                    year_increment=3,
-                    clear_first=False
+                    year_increment=3
                 )
                 
             elif choice in ["2", "3", "4", "5", "6"]:
@@ -120,14 +130,13 @@ def main():
                 start_year, end_year = year_ranges.get(year_choice, (current_year - 4, current_year + 1))
                 
                 print(f"\nProcessing {region} from FY{start_year} to FY{end_year}")
-                print("This may take a while...")
+                print("This will process each sub-region individually...")
                 
                 bootstrap.run_by_subregion(
                     target_region=region,
                     start_year=start_year,
                     end_year=end_year,
-                    year_increment=5,
-                    clear_first=False
+                    year_increment=5
                 )
                 
             elif choice == "7":
@@ -146,8 +155,7 @@ def main():
                         target_subregion=subregion,
                         start_year=start_year,
                         end_year=end_year,
-                        year_increment=5,
-                        clear_first=False
+                        year_increment=5
                     )
                 else:
                     print("Invalid selection")
@@ -155,15 +163,23 @@ def main():
             elif choice == "8":
                 # Full historical
                 print("\n⚠️ WARNING: Full historical bootstrap will take several hours!")
+                print("It will process each sub-region individually for all years")
                 confirm = input("Are you sure? (yes/no): ").lower()
                 
                 if confirm == "yes":
                     print("\n📚 Starting FULL HISTORICAL bootstrap (1998-present)...")
+                    
+                    # Clear database first
+                    clear = input("Clear existing database first? (yes/no): ").lower()
+                    if clear == "yes":
+                        bootstrap.initialize_database()
+                        if bootstrap.progress_file.exists():
+                            bootstrap.progress_file.unlink()
+                    
                     bootstrap.run_by_subregion(
                         start_year=1998,
                         end_year=current_year + 1,
-                        year_increment=5,
-                        clear_first=False
+                        year_increment=5
                     )
                 
             elif choice == "9":
@@ -176,8 +192,9 @@ def main():
                 print("\nProcess which regions?")
                 print("1. All regions")
                 print("2. Specific region")
+                print("3. Specific sub-region")
                 
-                scope = input("Choice (1-2): ").strip()
+                scope = input("Choice (1-3): ").strip()
                 
                 if scope == "2":
                     regions = ["AFRICA", "AMERICAS", "ASIA", "MIDDLE_EAST", "EUROPE"]
@@ -190,15 +207,23 @@ def main():
                             target_region=regions[reg_idx],
                             start_year=start_year,
                             end_year=end_year,
-                            year_increment=increment,
-                            clear_first=False
+                            year_increment=increment
+                        )
+                elif scope == "3":
+                    region, subregion = select_subregion()
+                    if region and subregion:
+                        bootstrap.run_by_subregion(
+                            target_region=region,
+                            target_subregion=subregion,
+                            start_year=start_year,
+                            end_year=end_year,
+                            year_increment=increment
                         )
                 else:
                     bootstrap.run_by_subregion(
                         start_year=start_year,
                         end_year=end_year,
-                        year_increment=increment,
-                        clear_first=False
+                        year_increment=increment
                     )
             
             else:
@@ -220,6 +245,7 @@ def main():
             continue
     
     print("\nGoodbye!")
+
 
 if __name__ == "__main__":
     main()
