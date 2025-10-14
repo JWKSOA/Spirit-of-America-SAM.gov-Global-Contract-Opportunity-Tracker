@@ -2,25 +2,14 @@ name: Update Global SAM.gov Database
 
 on:
   schedule:
-    # Run daily at 2 AM EST
+    # Run daily at 2 AM EST (7 AM UTC)
     - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
-      region:
-        description: 'Specific region to update (leave empty for all)'
+      lookback_days:
+        description: 'Days to look back'
         required: false
-        type: choice
-        options:
-          - ''
-          - 'AFRICA'
-          - 'AMERICAS'
-          - 'ASIA'
-          - 'MIDDLE_EAST'
-          - 'EUROPE'
-      years_back:
-        description: 'Years to look back'
-        required: false
-        default: '2'
+        default: '14'
 
 permissions:
   contents: write
@@ -29,7 +18,7 @@ permissions:
 jobs:
   update-database:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     
     steps:
       - name: Checkout repository
@@ -37,6 +26,11 @@ jobs:
         with:
           fetch-depth: 1
           lfs: true
+      
+      - name: Setup Git LFS
+        run: |
+          git lfs install
+          git lfs pull
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -48,52 +42,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Ensure chardet is installed
-          pip install chardet
-      
-      - name: Create data directory
-        run: mkdir -p data
-      
-      - name: Configure Git LFS
-        run: |
-          git lfs install
-          git lfs track "data/*.db"
-          git add .gitattributes
       
       - name: Run daily update
-        env:
-          REGION: ${{ github.event.inputs.region }}
         run: |
-          echo "Running daily update..."
-          
-          # Use the daily updater for incremental updates
-          python global_daily_update.py
-          
-          # Only run full bootstrap if specifically requested or weekly
-          if [ "$(date +%u)" = "1" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Running weekly refresh..."
-            YEARS_BACK=${YEARS:-2}
-            CURRENT_YEAR=$(date +%Y)
-            START_YEAR=$((CURRENT_YEAR - YEARS_BACK))
-            
-            if [ -z "$REGION" ]; then
-              python global_bootstrap.py \
-                --start-year $START_YEAR \
-                --end-year $CURRENT_YEAR \
-                --year-increment 3
-            else
-              python global_bootstrap.py \
-                --region $REGION \
-                --start-year $START_YEAR \
-                --end-year $CURRENT_YEAR \
-                --year-increment 3
-            fi
-          fi
-      
-      - name: Test database
-        run: |
-          echo "Testing database..."
-          python test_data_loading.py
+          python global_daily_update.py --lookback-days ${{ github.event.inputs.lookback_days || '14' }}
       
       - name: Configure Git
         run: |
@@ -102,45 +54,10 @@ jobs:
       
       - name: Commit and push changes
         run: |
-          # Add all changes including LFS files
           git add -A
-          
-          # Check if there are changes
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            # Get statistics for commit message
-            STATS=$(python -c "
-import sqlite3
-from pathlib import Path
-
-db_path = Path('data/global_opportunities.db')
-if db_path.exists():
-    conn = sqlite3.connect(str(db_path))
-    cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM opportunities')
-    total = cur.fetchone()[0]
-    
-    cur.execute('''
-        SELECT Geographic_Region, COUNT(*) 
-        FROM opportunities 
-        WHERE Geographic_Region IS NOT NULL 
-        GROUP BY Geographic_Region
-    ''')
-    regions = dict(cur.fetchall())
-    
-    print(f'Total: {total:,} opportunities')
-    for region, count in regions.items():
-        if region:
-            print(f'{region}: {count:,}')
-    conn.close()
-            " 2>/dev/null || echo "Update completed")
-            
-            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-            
-            # Create commit message
-            git commit -m "Automatic update [$TIMESTAMP]" -m "$STATS"
-            
-            # Push changes including LFS objects
+            git commit -m "Automatic daily update [$(date -u +"%Y-%m-%d")]"
             git push origin main
           fi
