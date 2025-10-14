@@ -26,8 +26,9 @@ tmp/
 data/*.csv
 data/*.zip
 data/bootstrap_progress.json
+data/.cache/
 
-# Streamlit
+# Streamlit secrets
 .streamlit/secrets.toml
 
 # Keep the database (tracked by LFS)
