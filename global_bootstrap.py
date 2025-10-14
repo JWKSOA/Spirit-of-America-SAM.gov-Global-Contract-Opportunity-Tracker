@@ -80,32 +80,8 @@ class GlobalBootstrap:
         except Exception as e:
             logger.error(f"Could not save progress: {e}")
     
-    def detect_encoding(self, file_path: Path) -> str:
-        """Detect file encoding using chardet"""
-        try:
-            # Read a sample of the file
-            with open(file_path, 'rb') as f:
-                raw_data = f.read(100000)  # Read first 100KB
-            
-            # Detect encoding
-            result = chardet.detect(raw_data)
-            encoding = result.get('encoding', 'latin-1')
-            confidence = result.get('confidence', 0)
-            
-            logger.info(f"Detected encoding: {encoding} (confidence: {confidence:.2f})")
-            
-            # Use fallback if confidence is low
-            if confidence < 0.7:
-                encoding = 'latin-1'  # Latin-1 can decode any byte sequence
-                logger.info(f"Low confidence, using fallback encoding: {encoding}")
-            
-            return encoding
-        except Exception as e:
-            logger.warning(f"Error detecting encoding: {e}, using latin-1")
-            return 'latin-1'
-    
     def read_csv_with_encoding(self, file_path: Path, chunksize: int = None):
-        """Read CSV with automatic encoding detection"""
+        """Read CSV with automatic encoding detection - FIXED VERSION"""
         # Try encodings in order of likelihood
         encodings = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1', 'cp1252']
         
@@ -113,35 +89,55 @@ class GlobalBootstrap:
             try:
                 logger.info(f"  Trying to read CSV with {encoding} encoding...")
                 
-                if chunksize:
-                    return pd.read_csv(
-                        file_path,
-                        chunksize=chunksize,
-                        encoding=encoding,
-                        dtype=str,
-                        on_bad_lines='skip',
-                        low_memory=False,
-                        engine='python'
-                    )
+                # Use default C engine with low_memory for utf-8
+                if encoding == 'utf-8':
+                    if chunksize:
+                        return pd.read_csv(
+                            file_path,
+                            chunksize=chunksize,
+                            encoding=encoding,
+                            dtype=str,
+                            on_bad_lines='skip',
+                            low_memory=False  # OK with default engine
+                        )
+                    else:
+                        return pd.read_csv(
+                            file_path,
+                            encoding=encoding,
+                            dtype=str,
+                            on_bad_lines='skip',
+                            low_memory=False  # OK with default engine
+                        )
                 else:
-                    return pd.read_csv(
-                        file_path,
-                        encoding=encoding,
-                        dtype=str,
-                        on_bad_lines='skip',
-                        low_memory=False,
-                        engine='python'
-                    )
+                    # Use python engine for other encodings, WITHOUT low_memory
+                    if chunksize:
+                        return pd.read_csv(
+                            file_path,
+                            chunksize=chunksize,
+                            encoding=encoding,
+                            dtype=str,
+                            on_bad_lines='skip',
+                            engine='python'  # NO low_memory parameter here!
+                        )
+                    else:
+                        return pd.read_csv(
+                            file_path,
+                            encoding=encoding,
+                            dtype=str,
+                            on_bad_lines='skip',
+                            engine='python'  # NO low_memory parameter here!
+                        )
             except UnicodeDecodeError as e:
-                logger.debug(f"  {encoding} failed: {e}")
+                logger.debug(f"  {encoding} failed with UnicodeDecodeError: {e}")
                 continue
             except Exception as e:
-                logger.debug(f"  {encoding} failed with other error: {e}")
+                logger.debug(f"  {encoding} failed with error: {e}")
                 continue
         
         # If all encodings fail, try with error handling
         logger.warning("  All standard encodings failed, using latin-1 with error='replace'")
         
+        # CRITICAL FIX: Remove low_memory from these fallback calls!
         if chunksize:
             return pd.read_csv(
                 file_path,
@@ -150,8 +146,7 @@ class GlobalBootstrap:
                 encoding_errors='replace',
                 dtype=str,
                 on_bad_lines='skip',
-                low_memory=False,
-                engine='python'
+                engine='python'  # NO low_memory here - this was the bug!
             )
         else:
             return pd.read_csv(
@@ -160,8 +155,7 @@ class GlobalBootstrap:
                 encoding_errors='replace',
                 dtype=str,
                 on_bad_lines='skip',
-                low_memory=False,
-                engine='python'
+                engine='python'  # NO low_memory here - this was the bug!
             )
     
     def initialize_database(self):
@@ -229,6 +223,7 @@ class GlobalBootstrap:
                             progress = (downloaded / total_size) * 100
                             logger.info(f"  Download progress: {progress:.1f}%")
             
+            logger.info(f"  Download complete: {dest_path.name}")
             return True
             
         except Exception as e:
