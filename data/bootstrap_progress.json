@@ -1,0 +1,35 @@
+{
+  "AFRICA_Northern Africa_FY2024": {
+    "status": "error: The 'low_memory' option is not supported with the 'python' engine",
+    "timestamp": "2025-10-14T13:39:10.701029",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0,
+      "total_inserted": 0
+    }
+  },
+  "AFRICA_Northern Africa_FY2025": {
+    "status": "error: The 'low_memory' option is not supported with the 'python' engine",
+    "timestamp": "2025-10-14T13:39:19.596377",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0,
+      "total_inserted": 0
+    }
+  },
+  "AFRICA_Northern Africa_FY2026": {
+    "status": "error: The 'low_memory' option is not supported with the 'python' engine",
+    "timestamp": "2025-10-14T13:39:28.772496",
+    "stats": {
+      "by_region": {},
+      "by_subregion": {},
+      "total_processed": 0,
+      "total_found": 0,
+      "total_inserted": 0
+    }
+  }
+}

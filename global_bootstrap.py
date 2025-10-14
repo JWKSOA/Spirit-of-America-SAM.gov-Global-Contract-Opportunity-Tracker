@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-global_bootstrap.py - Fixed version with proper sub-region processing
-Processes SAM.gov data by sub-region to handle massive global dataset
-Based on successful Africa dashboard approach
+global_bootstrap.py - Fixed version with proper encoding handling
+Processes SAM.gov data by sub-region with robust character encoding support
 """
 
 import os
@@ -80,6 +79,90 @@ class GlobalBootstrap:
                 json.dump(self.completed_segments, f, indent=2)
         except Exception as e:
             logger.error(f"Could not save progress: {e}")
+    
+    def detect_encoding(self, file_path: Path) -> str:
+        """Detect file encoding using chardet"""
+        try:
+            # Read a sample of the file
+            with open(file_path, 'rb') as f:
+                raw_data = f.read(100000)  # Read first 100KB
+            
+            # Detect encoding
+            result = chardet.detect(raw_data)
+            encoding = result.get('encoding', 'latin-1')
+            confidence = result.get('confidence', 0)
+            
+            logger.info(f"Detected encoding: {encoding} (confidence: {confidence:.2f})")
+            
+            # Use fallback if confidence is low
+            if confidence < 0.7:
+                encoding = 'latin-1'  # Latin-1 can decode any byte sequence
+                logger.info(f"Low confidence, using fallback encoding: {encoding}")
+            
+            return encoding
+        except Exception as e:
+            logger.warning(f"Error detecting encoding: {e}, using latin-1")
+            return 'latin-1'
+    
+    def read_csv_with_encoding(self, file_path: Path, chunksize: int = None):
+        """Read CSV with automatic encoding detection"""
+        # Try encodings in order of likelihood
+        encodings = ['utf-8', 'latin-1', 'windows-1252', 'iso-8859-1', 'cp1252']
+        
+        for encoding in encodings:
+            try:
+                logger.info(f"  Trying to read CSV with {encoding} encoding...")
+                
+                if chunksize:
+                    return pd.read_csv(
+                        file_path,
+                        chunksize=chunksize,
+                        encoding=encoding,
+                        dtype=str,
+                        on_bad_lines='skip',
+                        low_memory=False,
+                        engine='python'
+                    )
+                else:
+                    return pd.read_csv(
+                        file_path,
+                        encoding=encoding,
+                        dtype=str,
+                        on_bad_lines='skip',
+                        low_memory=False,
+                        engine='python'
+                    )
+            except UnicodeDecodeError as e:
+                logger.debug(f"  {encoding} failed: {e}")
+                continue
+            except Exception as e:
+                logger.debug(f"  {encoding} failed with other error: {e}")
+                continue
+        
+        # If all encodings fail, try with error handling
+        logger.warning("  All standard encodings failed, using latin-1 with error='replace'")
+        
+        if chunksize:
+            return pd.read_csv(
+                file_path,
+                chunksize=chunksize,
+                encoding='latin-1',
+                encoding_errors='replace',
+                dtype=str,
+                on_bad_lines='skip',
+                low_memory=False,
+                engine='python'
+            )
+        else:
+            return pd.read_csv(
+                file_path,
+                encoding='latin-1',
+                encoding_errors='replace',
+                dtype=str,
+                on_bad_lines='skip',
+                low_memory=False,
+                engine='python'
+            )
     
     def initialize_database(self):
         """Initialize or clear database"""
@@ -196,11 +279,12 @@ class GlobalBootstrap:
                 self._save_progress(segment_key, "download_failed")
                 return 0, 0
             
-            # Process CSV in chunks
+            # Process CSV in chunks with encoding detection
             try:
                 chunk_num = 0
-                for chunk in pd.read_csv(csv_path, chunksize=self.chunk_size, 
-                                        dtype=str, on_bad_lines='skip', low_memory=False):
+                
+                # Read CSV with automatic encoding detection
+                for chunk in self.read_csv_with_encoding(csv_path, chunksize=self.chunk_size):
                     chunk_num += 1
                     
                     # Filter for this sub-region
@@ -243,7 +327,7 @@ class GlobalBootstrap:
                 
             except Exception as e:
                 logger.error(f"Error processing {segment_key}: {e}")
-                self._save_progress(segment_key, "error")
+                self._save_progress(segment_key, f"error: {str(e)}")
         
         # Clean up memory
         gc.collect()
