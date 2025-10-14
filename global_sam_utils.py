@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 global_sam_utils.py - Fixed Global SAM.gov data handler for Spirit of America
-Fixed CSV reading based on working Africa Dashboard code
+Complete schema matching SAM.gov documentation and Africa Dashboard
 """
 
 import os
@@ -332,14 +332,6 @@ class GlobalCountryManager:
             country_name = self.iso3_to_country[iso3]
             return f"{country_name} ({iso3})"
         return None
-    
-    def get_countries_by_region(self, region: str) -> List[str]:
-        """Get all ISO3 codes for a specific region"""
-        return self.region_countries.get(region, [])
-    
-    def get_countries_by_subregion(self, region: str, subregion: str) -> List[str]:
-        """Get all ISO3 codes for a specific sub-region"""
-        return self.subregion_countries.get((region, subregion), [])
 
 
 # ============================================================================
@@ -381,19 +373,53 @@ class GlobalConfig:
         "https://falextracts.s3.amazonaws.com/Contract%20Opportunities/Archived%20Data/"
     )
     
-    # SAM.gov column names
+    # EXACT column names from SAM.gov documentation
     sam_columns: Dict[str, str] = field(default_factory=lambda: {
         "NoticeId": "The ID of the notice",
         "Title": "The title of the opportunity",
         "Sol#": "The number of the solicitation",
         "Department/Ind.Agency": "The department (L1)",
+        "CGAC": "Common Governmentwide Accounting Classification",
+        "Sub-Tier": "The sub-tier (L2)",
+        "FPDS Code": "Federal Procurement Data System code",
+        "Office": "The office (L3)",
+        "AAC Code": "Activity Address Code",
         "PostedDate": "Date posted (YYYY-MM-DD) (HH-MM-SS)",
         "Type": "The opportunity's current type",
-        "PopCountry": "Place of performance country",
+        "BaseType": "The opportunity's original type",
+        "ArchiveType": "Archive type",
+        "ArchiveDate": "Date archived",
+        "SetASideCode": "Set aside code",
+        "SetASide": "Description of the set aside",
+        "ResponseDeadLine": "Deadline date to respond",
+        "NaicsCode": "NAICS code",
+        "ClassificationCode": "Classification code",
+        "PopStreetAddress": "Place of performance street address",
         "PopCity": "Place of performance city",
         "PopState": "Place of performance state",
+        "PopZip": "Place of performance zip",
+        "PopCountry": "Place of performance country",
         "Active": "If Active = Yes, then opportunity is active",
-        "ResponseDeadLine": "Deadline date to respond",
+        "AwardNumber": "The award number",
+        "AwardDate": "Date the opportunity was awarded",
+        "Award$": "Monetary amount of the award",
+        "Awardee": "Name and location of the awardee",
+        "PrimaryContactTitle": "Title of the primary contact",
+        "PrimaryContactFullName": "Primary contact's full name",
+        "PrimaryContactEmail": "Primary contact's email",
+        "PrimaryContactPhone": "Primary contact's phone number",
+        "PrimaryContactFax": "Primary contact's fax number",
+        "SecondaryContactTitle": "Title of the secondary contact",
+        "SecondaryContactFullName": "Secondary contact's full name",
+        "SecondaryContactEmail": "Secondary contact's email",
+        "SecondaryContactPhone": "Secondary contact's phone number",
+        "SecondaryContactFax": "Secondary contact's fax number",
+        "OrganizationType": "Type of organization",
+        "State": "Office address state",
+        "City": "Office address city",
+        "ZipCode": "Office address zip code",
+        "CountryCode": "Office address country code",
+        "AdditionalInfoLink": "Any additional info link",
         "Link": "The direct UI link to the opportunity",
         "Description": "Description of the opportunity"
     })
@@ -405,11 +431,11 @@ class GlobalConfig:
 
 
 # ============================================================================
-# DATABASE MANAGER - Extended with region columns
+# DATABASE MANAGER - Extended with Complete SAM.gov Schema
 # ============================================================================
 
 class GlobalDatabaseManager:
-    """Database operations for global SAM.gov data with region tracking"""
+    """Database operations for global SAM.gov data with complete schema"""
     
     def __init__(self, config: GlobalConfig, country_manager: GlobalCountryManager):
         self.config = config
@@ -437,15 +463,26 @@ class GlobalDatabaseManager:
             if conn:
                 conn.close()
     
+    def needs_quoting(self, column_name: str) -> bool:
+        """Check if a column name needs quoting in SQL"""
+        special_chars = ['/', '#', '$', '-', ' ', '.', '(', ')', '[', ']', '*', '&', '%', '@', '!']
+        return any(char in column_name for char in special_chars)
+    
+    def quote_column(self, column_name: str) -> str:
+        """Properly quote a column name for SQL if needed"""
+        if self.needs_quoting(column_name):
+            return f'"{column_name}"'
+        return column_name
+    
     def initialize_database(self):
-        """Create database with SAM.gov schema plus region fields"""
+        """Create database with complete SAM.gov schema plus region fields"""
         with self.get_connection() as conn:
             cur = conn.cursor()
             
             # Drop existing table to start fresh
             cur.execute("DROP TABLE IF EXISTS opportunities")
             
-            # Create table with SAM.gov columns plus region tracking
+            # Create table with COMPLETE SAM.gov columns plus region tracking
             cur.execute("""
                 CREATE TABLE opportunities (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -453,17 +490,51 @@ class GlobalDatabaseManager:
                     Title TEXT,
                     "Sol#" TEXT,
                     "Department/Ind.Agency" TEXT,
+                    CGAC TEXT,
+                    "Sub-Tier" TEXT,
+                    "FPDS Code" TEXT,
+                    Office TEXT,
+                    "AAC Code" TEXT,
                     PostedDate TEXT,
                     PostedDate_normalized DATE,
                     Type TEXT,
+                    BaseType TEXT,
+                    ArchiveType TEXT,
+                    ArchiveDate TEXT,
+                    SetASideCode TEXT,
+                    SetASide TEXT,
+                    ResponseDeadLine TEXT,
+                    NaicsCode TEXT,
+                    ClassificationCode TEXT,
+                    PopStreetAddress TEXT,
+                    PopCity TEXT,
+                    PopState TEXT,
+                    PopZip TEXT,
                     PopCountry TEXT,
                     PopCountry_ISO3 TEXT,
                     Geographic_Region TEXT,
                     Geographic_SubRegion TEXT,
-                    PopCity TEXT,
-                    PopState TEXT,
                     Active TEXT,
-                    ResponseDeadLine TEXT,
+                    AwardNumber TEXT,
+                    AwardDate TEXT,
+                    "Award$" TEXT,
+                    Awardee TEXT,
+                    PrimaryContactTitle TEXT,
+                    PrimaryContactFullName TEXT,
+                    PrimaryContactEmail TEXT,
+                    PrimaryContactPhone TEXT,
+                    PrimaryContactFax TEXT,
+                    SecondaryContactTitle TEXT,
+                    SecondaryContactFullName TEXT,
+                    SecondaryContactEmail TEXT,
+                    SecondaryContactPhone TEXT,
+                    SecondaryContactFax TEXT,
+                    OrganizationType TEXT,
+                    State TEXT,
+                    City TEXT,
+                    ZipCode TEXT,
+                    CountryCode TEXT,
+                    AdditionalInfoLink TEXT,
                     Link TEXT,
                     Description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -481,6 +552,8 @@ class GlobalDatabaseManager:
                 "CREATE INDEX idx_region ON opportunities(Geographic_Region)",
                 "CREATE INDEX idx_subregion ON opportunities(Geographic_SubRegion)",
                 "CREATE INDEX idx_active ON opportunities(Active)",
+                "CREATE INDEX idx_type ON opportunities(Type)",
+                'CREATE INDEX idx_dept ON opportunities("Department/Ind.Agency")',
                 "CREATE INDEX idx_region_date ON opportunities(Geographic_Region, PostedDate_normalized DESC)"
             ]
             
@@ -488,7 +561,7 @@ class GlobalDatabaseManager:
                 cur.execute(idx_sql)
             
             conn.commit()
-            logger.info("Global database initialized with region tracking")
+            logger.info("Global database initialized with complete SAM.gov schema")
     
     def normalize_posted_date(self, date_str: str) -> Optional[str]:
         """Normalize PostedDate from SAM.gov format to YYYY-MM-DD"""
@@ -518,7 +591,7 @@ class GlobalDatabaseManager:
         return None
     
     def insert_or_update_batch(self, df: pd.DataFrame, source: str = "unknown") -> Tuple[int, int, int]:
-        """Insert or update batch with region identification"""
+        """Insert or update batch with complete SAM.gov data and region identification"""
         if df.empty:
             return 0, 0, 0
         
@@ -571,12 +644,11 @@ class GlobalDatabaseManager:
                     columns.append('PopCountry')
                     values.append(std_country)
                     
-                    # Add other columns
-                    for col in ['Title', 'Department/Ind.Agency', 'PostedDate', 'Type', 
-                               'PopCity', 'PopState', 'Active', 'ResponseDeadLine', 
-                               'Link', 'Description', 'Sol#']:
-                        if col in row.index:
-                            if col == 'Department/Ind.Agency' or col == 'Sol#':
+                    # Add all other SAM.gov columns
+                    for col in self.config.sam_columns.keys():
+                        if col not in ['NoticeId', 'PopCountry'] and col in row.index:
+                            # Properly quote special columns
+                            if self.needs_quoting(col):
                                 columns.append(f'"{col}"')
                             else:
                                 columns.append(col)
@@ -596,7 +668,8 @@ class GlobalDatabaseManager:
                         logger.error(f"Insert error for {notice_id}: {e}")
                         skipped += 1
                 else:
-                    skipped += 1  # For simplicity, skip updates
+                    # For now, skip updates to keep it simple
+                    skipped += 1
             
             conn.commit()
         
