@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
-import chardet
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -40,15 +39,27 @@ class GlobalDailyUpdater:
         for encoding in encodings:
             try:
                 logger.info(f"Trying to read CSV with {encoding} encoding...")
-                return pd.read_csv(
-                    file_path,
-                    chunksize=chunksize,
-                    encoding=encoding,
-                    dtype=str,
-                    on_bad_lines='skip',
-                    low_memory=False,
-                    engine='python'
-                )
+                
+                # Use default C engine with low_memory for utf-8
+                if encoding == 'utf-8':
+                    return pd.read_csv(
+                        file_path,
+                        chunksize=chunksize,
+                        encoding=encoding,
+                        dtype=str,
+                        on_bad_lines='skip',
+                        low_memory=False
+                    )
+                else:
+                    # Use python engine for other encodings, WITHOUT low_memory
+                    return pd.read_csv(
+                        file_path,
+                        chunksize=chunksize,
+                        encoding=encoding,
+                        dtype=str,
+                        on_bad_lines='skip',
+                        engine='python'
+                    )
             except UnicodeDecodeError:
                 continue
             except Exception as e:
@@ -64,7 +75,6 @@ class GlobalDailyUpdater:
             encoding_errors='replace',
             dtype=str,
             on_bad_lines='skip',
-            low_memory=False,
             engine='python'
         )
         
